@@ -66,8 +66,7 @@ class ScribbleHubPlugin implements Plugin.PluginBase {
         link += '&sort=' + filters.sort.value;
         link += '&order=' + filters.order.value;
 
-        const headers = new Headers();
-        const body = await fetchApi(link, { headers }).then((result) =>
+        const body = await fetchApi(link).then((result) =>
             result.text()
         );
 
@@ -144,8 +143,7 @@ class ScribbleHubPlugin implements Plugin.PluginBase {
     }
 
     async parseChapter(chapterUrl: string): Promise<string> {
-        const headers = new Headers();
-        const result = await fetchApi(chapterUrl, { headers });
+        const result = await fetchApi(chapterUrl);
         const body = await result.text();
 
         const loadedCheerio = parseHTML(body);
@@ -159,8 +157,7 @@ class ScribbleHubPlugin implements Plugin.PluginBase {
         pageNo: number
     ): Promise<Plugin.NovelItem[]> {
         const url =`${this.site}?s=${searchTerm}&post_type=fictionposts`;
-        const headers = new Headers();
-        const result = await fetchApi(url, { headers });
+        const result = await fetchApi(url);
         const body = await result.text();
 
         const loadedCheerio = parseHTML(body);

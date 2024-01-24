@@ -182,7 +182,7 @@ var ScribbleHubPlugin = /** @class */ (function () {
         var _b, _c, _d, _e, _f, _g, _h, _j;
         var showLatestNovels = _a.showLatestNovels, filters = _a.filters;
         return __awaiter(this, void 0, void 0, function () {
-            var link, headers, body, loadedCheerio;
+            var link, body, loadedCheerio;
             return __generator(this, function (_k) {
                 switch (_k.label) {
                     case 0:
@@ -210,8 +210,7 @@ var ScribbleHubPlugin = /** @class */ (function () {
                             link += '&mct' + filters.content_warning_operator.value;
                         link += '&sort=' + filters.sort.value;
                         link += '&order=' + filters.order.value;
-                        headers = new Headers();
-                        return [4 /*yield*/, (0, fetch_1.fetchApi)(link, { headers: headers }).then(function (result) {
+                        return [4 /*yield*/, (0, fetch_1.fetchApi)(link).then(function (result) {
                                 return result.text();
                             })];
                     case 1:
@@ -289,12 +288,10 @@ var ScribbleHubPlugin = /** @class */ (function () {
     };
     ScribbleHubPlugin.prototype.parseChapter = function (chapterUrl) {
         return __awaiter(this, void 0, void 0, function () {
-            var headers, result, body, loadedCheerio, chapterText;
+            var result, body, loadedCheerio, chapterText;
             return __generator(this, function (_a) {
                 switch (_a.label) {
-                    case 0:
-                        headers = new Headers();
-                        return [4 /*yield*/, (0, fetch_1.fetchApi)(chapterUrl, { headers: headers })];
+                    case 0: return [4 /*yield*/, (0, fetch_1.fetchApi)(chapterUrl)];
                     case 1:
                         result = _a.sent();
                         return [4 /*yield*/, result.text()];
@@ -309,13 +306,12 @@ var ScribbleHubPlugin = /** @class */ (function () {
     };
     ScribbleHubPlugin.prototype.searchNovels = function (searchTerm, pageNo) {
         return __awaiter(this, void 0, void 0, function () {
-            var url, headers, result, body, loadedCheerio;
+            var url, result, body, loadedCheerio;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
                         url = "".concat(this.site, "?s=").concat(searchTerm, "&post_type=fictionposts");
-                        headers = new Headers();
-                        return [4 /*yield*/, (0, fetch_1.fetchApi)(url, { headers: headers })];
+                        return [4 /*yield*/, (0, fetch_1.fetchApi)(url)];
                     case 1:
                         result = _a.sent();
                         return [4 /*yield*/, result.text()];
