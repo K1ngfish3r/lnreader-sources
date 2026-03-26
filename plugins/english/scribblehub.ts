@@ -9,17 +9,15 @@ class ScribbleHubPlugin implements Plugin.PluginBase {
   name = 'Scribble Hub';
   icon = 'src/en/scribblehub/icon.png';
   site = 'https://www.scribblehub.com/';
-  version = '1.0.2';
+  version = '1.0.3';
 
   parseNovels(loadedCheerio: CheerioAPI) {
     const novels: Plugin.NovelItem[] = [];
 
     loadedCheerio('.search_main_box').each((i, el) => {
-      const novelName = loadedCheerio(el).find('.search_title > a').text();
-      const novelCover = loadedCheerio(el)
-        .find('.search_img > img')
-        .attr('src');
-      const novelUrl = loadedCheerio(el).find('.search_title > a').attr('href');
+      const novelName = loadedCheerio(el).find('.search_title a').text();
+      const novelCover = loadedCheerio(el).find('img').attr('src');
+      const novelUrl = loadedCheerio(el).find('.search_title a').attr('href');
 
       if (!novelUrl) return;
 
@@ -40,48 +38,45 @@ class ScribbleHubPlugin implements Plugin.PluginBase {
       filters,
     }: Plugin.PopularNovelsOptions<typeof this.filters>,
   ): Promise<Plugin.NovelItem[]> {
-    let url = `${this.site}`;
-    if (showLatestNovels) {
-      url += `latest-series/?pg=${page}`;
-    } else if (filters) {
-      const params = new URLSearchParams();
-      if (filters.genres.value.include?.length) {
-        params.append('gi', filters.genres.value.include.join(','));
+    const basePath = showLatestNovels ? 'latest-series/' : 'series-finder/';
+    const url = new URL(basePath, this.site);
+
+    if (!showLatestNovels) {
+      url.searchParams.set('sf', '1');
+
+      const {
+        genres,
+        content_warn,
+        genre_operator,
+        content_warn_operator,
+        storyStatus,
+        sort,
+        order,
+      } = filters;
+
+      [
+        [genres.value, 'gi', 'ge', 'mgi', genre_operator.value],
+        [content_warn.value, 'cti', 'cte', 'mct', content_warn_operator.value],
+      ].forEach(([data, inc, exc, op, opVal]: any) => {
+        const { include: i = [], exclude: e = [] } = data;
+
+        if (i.length) url.searchParams.set(inc, i.join(','));
+        if (i.length + e.length > 1) url.searchParams.set(op, opVal);
+        if (e.length) url.searchParams.set(exc, e.join(','));
+      });
+
+      if (storyStatus.value !== 'all') {
+        url.searchParams.set('cp', storyStatus.value);
       }
-      if (
-        filters.genres.value.include?.length ||
-        filters.genres.value.exclude?.length
-      ) {
-        params.append('mgi', filters.genre_operator.value);
-      }
-      if (filters.genres.value.exclude?.length) {
-        params.append('ge', filters.genres.value.exclude.join(','));
-      }
-      if (filters.content_warning.value.include?.length) {
-        params.append('cti', filters.content_warning.value.include.join(','));
-      }
-      if (
-        filters.content_warning.value.include?.length ||
-        filters.content_warning.value.exclude?.length
-      ) {
-        params.append('mct', filters.content_warning_operator.value);
-      }
-      if (filters.content_warning.value.exclude?.length) {
-        params.append('cte', filters.content_warning.value.exclude.join(','));
-      }
-      params.append('cp', filters.storyStatus.value);
-      params.append('sort', filters.sort.value);
-      params.append('order', filters.order.value);
-      params.append('pg', page.toString());
-      url += `series-finder/?sf=1&${params.toString()}`;
-    } else {
-      url += `series-finder/?sf=1&sort=ratings&order=desc&pg=${page}`;
+
+      url.searchParams.set('sort', sort.value);
+      url.searchParams.set('order', order.value);
     }
 
-    const body = await fetchApi(url).then(result => result.text());
+    url.searchParams.set('pg', page.toString());
 
-    const loadedCheerio = parseHTML(body);
-    return this.parseNovels(loadedCheerio);
+    const body = await fetchApi(url.toString()).then(res => res.text());
+    return this.parseNovels(parseHTML(body));
   }
 
   async parseNovel(novelPath: string): Promise<Plugin.SourceNovel> {
@@ -89,6 +84,7 @@ class ScribbleHubPlugin implements Plugin.PluginBase {
     const body = await result.text();
 
     let loadedCheerio = parseHTML(body);
+    loadedCheerio('.wi_fic_desc .dots,.list').remove();
 
     const novel: Plugin.SourceNovel = {
       path: novelPath,
@@ -177,12 +173,12 @@ class ScribbleHubPlugin implements Plugin.PluginBase {
   }
 
   async searchNovels(searchTerm: string): Promise<Plugin.NovelItem[]> {
-    const url = `${this.site}?s=${encodeURIComponent(searchTerm)}&post_type=fictionposts`;
-    const result = await fetchApi(url);
-    const body = await result.text();
+    const url = new URL(this.site);
+    url.searchParams.set('s', searchTerm);
+    url.searchParams.set('post_type', 'fictionposts');
 
-    const loadedCheerio = parseHTML(body);
-    return this.parseNovels(loadedCheerio);
+    const body = await fetchApi(url.toString()).then(res => res.text());
+    return this.parseNovels(parseHTML(body));
   }
 
   filters = {
@@ -275,7 +271,7 @@ class ScribbleHubPlugin implements Plugin.PluginBase {
       ],
       type: FilterTypes.ExcludableCheckboxGroup,
     },
-    content_warning_operator: {
+    content_warn_operator: {
       value: 'and',
       label: 'Mature Content (And/Or)',
       options: [
@@ -284,7 +280,7 @@ class ScribbleHubPlugin implements Plugin.PluginBase {
       ],
       type: FilterTypes.Picker,
     },
-    content_warning: {
+    content_warn: {
       value: {
         include: [],
         exclude: [],
