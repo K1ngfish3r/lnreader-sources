@@ -9,7 +9,7 @@ import { storage } from '@libs/storage';
 class NovelFire implements Plugin.PluginBase {
   id = 'novelfire';
   name = 'Novel Fire';
-  version = '1.3.1';
+  version = '1.4.0';
   icon = 'src/en/novelfire/icon.png';
   site = 'https://novelfire.net/';
   webStorageUtilized = true;
@@ -18,15 +18,9 @@ class NovelFire implements Plugin.PluginBase {
 
   pluginSettings = {
     pageLength: {
-      value: '-1',
+      value: '',
       label: 'Page Mode (Change if Broken)',
-      type: 'Select',
-      options: [
-        { label: '100 (Fallback Mode)', value: '100' },
-        { label: '200', value: '200' },
-        { label: '500', value: '500' },
-        { label: 'All', value: '-1' },
-      ],
+      type: 'Switch',
     },
     singlePage: {
       value: '',
@@ -36,7 +30,7 @@ class NovelFire implements Plugin.PluginBase {
     },
   };
   singlePage = storage.get('singlePage');
-  pageLength = storage.get('pageLength') ?? '-1';
+  pageLength = storage.get('pageLength');
 
   async getCheerio(url: string, search: boolean): Promise<CheerioAPI> {
     const r = await fetchApi(url);
@@ -139,7 +133,7 @@ class NovelFire implements Plugin.PluginBase {
     post_id: string,
     page: string,
   ): Promise<Plugin.ChapterItem[]> {
-    const length = parseInt(this.pageLength) || -1;
+    const length = this.pageLength ? 100 : -1;
     const url = `${this.site}ajax/listChapterDataAjax`;
     const start = length === -1 ? 0 : (parseInt(page) - 1) * length;
     this.draw++;
@@ -344,7 +338,7 @@ class NovelFire implements Plugin.PluginBase {
       .parent()
       .text()
       .trim();
-    const length = parseInt(this.pageLength) || -1;
+    const length = this.pageLength ? 100 : -1;
     novel.totalPages =
       length === -1 ? 1 : Math.ceil(parseInt(totalChapters) / length) || 1;
     if (length === 100 && this.singlePage) {
@@ -371,7 +365,7 @@ class NovelFire implements Plugin.PluginBase {
     }
 
     // Fallback only works for multiples of 100
-    const length = parseInt(this.pageLength) || -1;
+    const length = this.pageLength ? 100 : -1;
     if (length === 100) {
       const url = `${this.site}${novelPath}/chapters?page=${page}`;
       const result = await fetchApi(url);
