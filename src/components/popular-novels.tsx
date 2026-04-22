@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Filter, BookOpen } from 'lucide-react';
 
 import { FiltersSheet } from '@/components/filters/filters-sheet';
@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useAppStore } from '@/store';
+import { useAppStore, AppStore } from '@/store';
 import { FilterToValues, Filters } from '@libs/filterInputs';
 import { Plugin } from '@/types/plugin';
 
@@ -19,8 +19,10 @@ type PopularNovelsSectionProps = {
 export default function PopularNovelsSection({
   onNavigateToParseNovel,
 }: PopularNovelsSectionProps) {
-  const plugin = useAppStore(state => state.plugin);
-  const setParseNovelPath = useAppStore(state => state.setParseNovelPath);
+  const plugin = useAppStore((state: AppStore) => state.plugin);
+  const setParseNovelPath = useAppStore(
+    (state: AppStore) => state.setParseNovelPath,
+  );
   const [novels, setNovels] = useState<Plugin.NovelItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -30,14 +32,39 @@ export default function PopularNovelsSection({
   const [filterValues, setFilterValues] = useState<
     FilterToValues<Filters> | undefined
   >();
+  const [prevPluginId, setPrevPluginId] = useState<string | undefined>();
+  const fetchedPluginId = useRef<string | undefined>();
 
-  const fetchNovelsByIndex = async (index: number) => {
+  if (plugin?.id !== prevPluginId) {
+    setPrevPluginId(plugin?.id);
+    setCurrentIndex(0);
+    setMaxIndex(0);
+    setNovels([]);
+
+    if (plugin?.filters) {
+      const filters: FilterToValues<typeof plugin.filters> = {};
+      for (const fKey in plugin.filters) {
+        filters[fKey as keyof typeof filters] = {
+          type: plugin.filters[fKey].type,
+          value: plugin.filters[fKey].value,
+        };
+      }
+      setFilterValues(filters);
+    } else {
+      setFilterValues(undefined);
+    }
+  }
+
+  const fetchNovelsByIndex = async (
+    index: number,
+    latestOverride?: boolean,
+  ) => {
     if (plugin && index) {
       setLoading(true);
       try {
         const fetchedNovels = await plugin.popularNovels(index, {
           filters: filterValues || {},
-          showLatestNovels: isLatest,
+          showLatestNovels: latestOverride ?? isLatest,
         });
         if (fetchedNovels.length !== 0) {
           setCurrentIndex(index);
@@ -55,30 +82,21 @@ export default function PopularNovelsSection({
   };
 
   useEffect(() => {
-    if (plugin) {
+    if (plugin && plugin.id !== fetchedPluginId.current) {
+      fetchedPluginId.current = plugin.id;
       setCurrentIndex(1);
       setMaxIndex(1);
       fetchNovelsByIndex(1);
     }
-  }, [isLatest]);
+  }, [plugin?.id]);
 
-  useEffect(() => {
-    // Reset when changing plugins
-    setCurrentIndex(0);
-    setMaxIndex(0);
-    setNovels([]);
-
-    if (plugin?.filters) {
-      const filters: FilterToValues<typeof plugin.filters> = {};
-      for (const fKey in plugin.filters) {
-        filters[fKey as keyof typeof filters] = {
-          type: plugin.filters[fKey].type,
-          value: plugin.filters[fKey].value,
-        };
-      }
-      setFilterValues(filters);
-    }
-  }, [plugin]);
+  const handleIsLatestChange = (latest: boolean) => {
+    if (isLatest === latest) return;
+    setIsLatest(latest);
+    setCurrentIndex(1);
+    setMaxIndex(1);
+    fetchNovelsByIndex(1, latest);
+  };
 
   const handleParseNovel = (path: string) => {
     setParseNovelPath(path, true);
@@ -136,7 +154,7 @@ export default function PopularNovelsSection({
                 isLatest === (option === 'Latest') ? 'default' : 'outline'
               }
               className="cursor-pointer"
-              onClick={() => setIsLatest(option === 'Latest')}
+              onClick={() => handleIsLatestChange(option === 'Latest')}
             >
               {option}
             </Badge>

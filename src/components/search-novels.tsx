@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Search as SearchIcon } from 'lucide-react';
 
 import { NovelCard } from '@/components/novel-card';
@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useAppStore } from '@/store';
+import { useAppStore, AppStore } from '@/store';
 import { Plugin } from '@/types/plugin';
 
 type SearchNovelsSectionProps = {
@@ -17,13 +17,24 @@ type SearchNovelsSectionProps = {
 export default function SearchNovelsSection({
   onNavigateToParseNovel,
 }: SearchNovelsSectionProps) {
-  const plugin = useAppStore(state => state.plugin);
-  const setParseNovelPath = useAppStore(state => state.setParseNovelPath);
+  const plugin = useAppStore((state: AppStore) => state.plugin);
+  const setParseNovelPath = useAppStore(
+    (state: AppStore) => state.setParseNovelPath,
+  );
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [novels, setNovels] = useState<Plugin.NovelItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState('');
+  const [prevPluginId, setPrevPluginId] = useState<string | undefined>();
+
+  if (plugin?.id !== prevPluginId) {
+    setPrevPluginId(plugin?.id);
+    setCurrentPage(1);
+    setNovels([]);
+    setSearchTerm('');
+    setFetchError('');
+  }
 
   const fetchNovels = async (page: number) => {
     if (plugin && searchTerm.trim()) {
@@ -43,13 +54,6 @@ export default function SearchNovelsSection({
       }
     }
   };
-
-  useEffect(() => {
-    setCurrentPage(1);
-    setNovels([]);
-    setSearchTerm('');
-    setFetchError('');
-  }, [plugin]);
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && searchTerm.trim()) {
@@ -85,7 +89,9 @@ export default function SearchNovelsSection({
           <Input
             placeholder="Enter search term..."
             value={searchTerm}
-            onChange={e => setSearchTerm(e.target.value)}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+              setSearchTerm(e.target.value)
+            }
             onKeyPress={handleKeyPress}
             className="flex-1"
             disabled={!plugin}

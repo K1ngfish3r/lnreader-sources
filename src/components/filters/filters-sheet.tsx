@@ -1,4 +1,4 @@
-import React, { useEffect, useState, ReactNode } from 'react';
+import React from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Sheet,
@@ -42,99 +42,105 @@ const renderFilters = (
 
   return (
     <>
-      {Object.entries(filters).map(([key, filter]) => {
-        if (!(key in values)) {
-          console.error(`No filter value for ${key} in filter values!`);
-          return null;
-        }
-        switch (filter.type) {
-          case FilterTypes.Picker: {
-            const value = values[key].value;
-            if (!isValueCorrectType<typeof filter.value>(value, filter.value)) {
-              console.error(
-                `FilterValue for filter [${key}] has a wrong type!`,
-              );
-              return null;
-            }
-            return (
-              <PickerFilter
-                key={`picker_filter_${key}`}
-                filter={{ key, filter }}
-                value={value}
-                set={newValue => set(key, newValue)}
-              />
-            );
+      {Object.entries(filters).map(
+        ([key, filter]: [string, Filters[string]]) => {
+          if (!(key in values)) {
+            console.error(`No filter value for ${key} in filter values!`);
+            return null;
           }
-          case FilterTypes.Switch: {
-            const value = values[key].value;
-            if (!isValueCorrectType<typeof filter.value>(value, filter.value)) {
-              console.error(
-                `FilterValue for filter [${key}] has a wrong type!`,
+          switch (filter.type) {
+            case FilterTypes.Picker: {
+              const value = values[key].value;
+              if (
+                !isValueCorrectType<typeof filter.value>(value, filter.value)
+              ) {
+                console.error(
+                  `FilterValue for filter [${key}] has a wrong type!`,
+                );
+                return null;
+              }
+              return (
+                <PickerFilter
+                  key={`picker_filter_${key}`}
+                  filter={{ key, filter }}
+                  value={value}
+                  set={newValue => set(key, newValue)}
+                />
               );
-              return null;
             }
-            return (
-              <SwitchFilter
-                filter={{ key, filter }}
-                key={`switch_filter_${key}`}
-                value={value}
-                set={newValue => set(key, newValue)}
-              />
-            );
-          }
-          case FilterTypes.TextInput: {
-            const value = values[key].value;
-            if (!isValueCorrectType(value, filter.value)) {
-              console.error(
-                `FilterValue for filter [${key}] has a wrong type!`,
+            case FilterTypes.Switch: {
+              const value = values[key].value;
+              if (
+                !isValueCorrectType<typeof filter.value>(value, filter.value)
+              ) {
+                console.error(
+                  `FilterValue for filter [${key}] has a wrong type!`,
+                );
+                return null;
+              }
+              return (
+                <SwitchFilter
+                  filter={{ key, filter }}
+                  key={`switch_filter_${key}`}
+                  value={value}
+                  set={newValue => set(key, newValue)}
+                />
               );
-              return null;
             }
-            return (
-              <TextFilter
-                filter={{ key, filter }}
-                set={newValue => set(key, newValue)}
-                value={value}
-                key={`text_filter_${key}`}
-              />
-            );
-          }
-          case FilterTypes.CheckboxGroup: {
-            const value = values[key].value;
-            if (!isValueCorrectType(value, filter.value)) {
-              console.error(
-                `FilterValue for filter [${key}] has a wrong type!`,
+            case FilterTypes.TextInput: {
+              const value = values[key].value;
+              if (!isValueCorrectType(value, filter.value)) {
+                console.error(
+                  `FilterValue for filter [${key}] has a wrong type!`,
+                );
+                return null;
+              }
+              return (
+                <TextFilter
+                  filter={{ key, filter }}
+                  set={newValue => set(key, newValue)}
+                  value={value}
+                  key={`text_filter_${key}`}
+                />
               );
-              return null;
             }
-            return (
-              <CheckboxFilter
-                filter={{ key, filter }}
-                set={newValue => set(key, newValue)}
-                value={value}
-                key={`checkbox_filter_${key}`}
-              />
-            );
-          }
-          case FilterTypes.ExcludableCheckboxGroup: {
-            const value = values[key].value;
-            if (!isValueCorrectType(value, filter.value)) {
-              console.error(
-                `FilterValue for filter [${key}] has a wrong type!`,
+            case FilterTypes.CheckboxGroup: {
+              const value = values[key].value;
+              if (!isValueCorrectType(value, filter.value)) {
+                console.error(
+                  `FilterValue for filter [${key}] has a wrong type!`,
+                );
+                return null;
+              }
+              return (
+                <CheckboxFilter
+                  filter={{ key, filter }}
+                  set={newValue => set(key, newValue)}
+                  value={value}
+                  key={`checkbox_filter_${key}`}
+                />
               );
-              return null;
             }
-            return (
-              <ExcludableCheckboxFilter
-                filter={{ key, filter }}
-                set={newValue => set(key, newValue)}
-                value={value}
-                key={`xcheсkbox_filter_${key}`}
-              />
-            );
+            case FilterTypes.ExcludableCheckboxGroup: {
+              const value = values[key].value;
+              if (!isValueCorrectType(value, filter.value)) {
+                console.error(
+                  `FilterValue for filter [${key}] has a wrong type!`,
+                );
+                return null;
+              }
+              return (
+                <ExcludableCheckboxFilter
+                  filter={{ key, filter }}
+                  set={newValue => set(key, newValue)}
+                  value={value}
+                  key={`xcheсkbox_filter_${key}`}
+                />
+              );
+            }
           }
-        }
-      })}
+        },
+      )}
     </>
   );
 };
@@ -158,10 +164,8 @@ export function FiltersSheet({
   filters,
   refetch,
 }: FiltersSheetProps) {
-  const [filterElements, setFilterElements] = useState<ReactNode>(null);
-
   const setFilterWithKey = (key: string, newValue: AnyFilterValue) =>
-    setValues(fValues =>
+    setValues((fValues: FilterToValues<Filters> | undefined) =>
       !fValues
         ? fValues
         : {
@@ -186,14 +190,12 @@ export function FiltersSheet({
     }
   };
 
-  useEffect(() => {
-    setFilterElements(renderFilters(filters, values, setFilterWithKey));
-  }, [values, filters]);
-
   const handleApply = () => {
     refetch();
     onOpenChange(false);
   };
+
+  const filterElements = renderFilters(filters, values, setFilterWithKey);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
