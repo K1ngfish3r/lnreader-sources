@@ -6,7 +6,7 @@ import { Plugin } from '@/types/plugin';
 class NovelUpdates implements Plugin.PluginBase {
   id = 'novelupdates';
   name = 'Novel Updates';
-  version = '0.9.8';
+  version = '0.9.9';
   icon = 'src/en/novelupdates/icon.png';
   customCSS = 'src/en/novelupdates/customCSS.css';
   site = 'https://www.novelupdates.com/';
@@ -342,23 +342,26 @@ class NovelUpdates implements Plugin.PluginBase {
         chapterContent = loadedCheerio('.content').html()!;
         break;
       }
-      // Last edited in 0.9.0 by Batorian - 19/03/2025
+      // Last edited in 0.9.0 by Batorian - 19/03/2025,
+      // remove any typing in 0.9.9 by K1ngfish3r - 04/05/2026, remove this comment if no issues
       case 'genesistudio': {
         const url = `${chapterPath}/__data.json?x-sveltekit-invalidated=001`;
         try {
           // Fetch the chapter's data in JSON format
-          const json = await fetchApi(url).then(r => r.json());
+          const json = (await fetchApi(url).then(r => r.json())) as {
+            nodes: { type: string; data: Record<string, unknown> }[];
+          };
           const nodes = json.nodes;
           const data = nodes
-            .filter((node: { type: string }) => node.type === 'data')
-            .map((node: { data: any }) => node.data)[0];
+            .filter(node => node.type === 'data')
+            .map(node => node.data)[0];
           // Look for chapter container with required fields
           const contentKey = 'content';
           const notesKey = 'notes';
           const footnotesKey = 'footnotes';
           // Iterate over each property in data to find chapter containers
           for (const key in data) {
-            const mapping = data[key];
+            const mapping = data[key] as Record<string, number>;
             // Check container for keys that match the required fields
             if (
               mapping &&
@@ -368,9 +371,11 @@ class NovelUpdates implements Plugin.PluginBase {
               footnotesKey in mapping
             ) {
               // Retrieve the chapter's content, notes, and footnotes using the mapping.
-              const content = data[mapping[contentKey]];
-              const notes = data[mapping[notesKey]];
-              const footnotes = data[mapping[footnotesKey]];
+              const content = data[String(mapping[contentKey])] as string;
+              const notes = data[String(mapping[notesKey])] as string;
+              const footnotes = data[String(mapping[footnotesKey])] as
+                | string
+                | undefined;
               // Combine the parts with appropriate formatting
               chapterText =
                 content +
