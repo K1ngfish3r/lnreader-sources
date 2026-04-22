@@ -9,7 +9,7 @@ import { storage } from '@libs/storage';
 class NovelFire implements Plugin.PluginBase {
   id = 'novelfire';
   name = 'Novel Fire';
-  version = '1.3.1';
+  version = '1.4.1';
   icon = 'src/en/novelfire/icon.png';
   site = 'https://novelfire.net/';
   webStorageUtilized = true;
@@ -18,15 +18,9 @@ class NovelFire implements Plugin.PluginBase {
 
   pluginSettings = {
     pageLength: {
-      value: '-1',
+      value: '',
       label: 'Page Mode (Change if Broken)',
-      type: 'Select',
-      options: [
-        { label: '100 (Fallback Mode)', value: '100' },
-        { label: '200', value: '200' },
-        { label: '500', value: '500' },
-        { label: 'All', value: '-1' },
-      ],
+      type: 'Switch',
     },
     singlePage: {
       value: '',
@@ -36,7 +30,7 @@ class NovelFire implements Plugin.PluginBase {
     },
   };
   singlePage = storage.get('singlePage');
-  pageLength = storage.get('pageLength') ?? '-1';
+  pageLength = storage.get('pageLength');
 
   async getCheerio(url: string, search: boolean): Promise<CheerioAPI> {
     const r = await fetchApi(url);
@@ -139,7 +133,7 @@ class NovelFire implements Plugin.PluginBase {
     post_id: string,
     page: string,
   ): Promise<Plugin.ChapterItem[]> {
-    const length = parseInt(this.pageLength) || -1;
+    const length = this.pageLength ? 100 : -1;
     const url = `${this.site}ajax/listChapterDataAjax`;
     const start = length === -1 ? 0 : (parseInt(page) - 1) * length;
     this.draw++;
@@ -176,38 +170,34 @@ class NovelFire implements Plugin.PluginBase {
     if (result.status === 429) throw new NovelFireThrottlingError();
 
     const body = await result.text();
-
-    if (body.includes('You are being rate limited')) {
+    if (body.includes('You are being rate limited'))
       throw new NovelFireThrottlingError();
-    }
+    if (body.includes('Page Not Found 404')) throw new NovelFireAjaxNotFound();
 
-    if (body.includes('Page Not Found 404')) {
-      throw new NovelFireAjaxNotFound();
-    }
+    return (JSON.parse(body).data || [])
+      .flatMap(
+        (idx: { title?: string; slug: string; n_sort: string | number }) => {
+          const name = load(idx.title || idx.slug)
+            .text()
+            .replace(/[\u200B-\u200D\uFEFF]/g, '')
+            .trim();
+          const num = Number(idx.n_sort);
 
-    const json = JSON.parse(body);
-    const chapters = (json.data || [])
-      .map((index: { title?: string; slug: string; n_sort: number }) => {
-        const chapterName = load(index.title || index.slug).text();
-        const chapterPath = `${novelPath}/chapter-${index.n_sort}`;
-        const sortNumber = index.n_sort;
-
-        if (!chapterPath) return null;
-
-        return {
-          name: chapterName,
-          path: chapterPath,
-          chapterNumber: Number(sortNumber),
-        };
-      })
-      .filter(
-        (chapter: Plugin.ChapterItem | null) => chapter !== null,
-      ) as Plugin.ChapterItem[];
-    const sortedChapters = chapters.sort(function (a, b) {
-      return (a.chapterNumber || 0) - (b.chapterNumber || 0);
-    });
-
-    return sortedChapters;
+          return name && !isNaN(num)
+            ? [
+                {
+                  name,
+                  path: `${novelPath}/chapter-${num}`,
+                  chapterNumber: num,
+                },
+              ]
+            : [];
+        },
+      )
+      .sort(
+        (a: Plugin.ChapterItem, b: Plugin.ChapterItem) =>
+          (a.chapterNumber || 0) - (b.chapterNumber || 0),
+      );
   }
 
   async getAllChaptersForce(
@@ -282,7 +272,7 @@ class NovelFire implements Plugin.PluginBase {
 
     const post_id = $('#novel-report').attr('report-post_id');
     if (post_id) {
-      storage.set(`novelfire_postid_${novelPath}`, post_id);
+      storage.set(`${this.id}_${novelPath.split('/').pop()}`, post_id);
     }
 
     const novel: Partial<Plugin.SourceNovel & { totalPages: number }> = {
@@ -344,9 +334,12 @@ class NovelFire implements Plugin.PluginBase {
       .parent()
       .text()
       .trim();
-    const length = parseInt(this.pageLength) || -1;
+    const length = this.pageLength ? 100 : -1;
     novel.totalPages =
       length === -1 ? 1 : Math.ceil(parseInt(totalChapters) / length) || 1;
+    if (novel.totalPages === 1 && post_id) {
+      novel.chapters = await this.getAllChapters(novelPath, post_id, '1');
+    }
     if (length === 100 && this.singlePage) {
       novel.chapters = await this.getAllChaptersForce(
         novel.path as string,
@@ -359,7 +352,7 @@ class NovelFire implements Plugin.PluginBase {
   }
 
   async parsePage(novelPath: string, page: string): Promise<Plugin.SourcePage> {
-    const post_id = storage.get(`novelfire_postid_${novelPath}`);
+    const post_id = storage.get(`${this.id}_${novelPath.split('/').pop()}`);
 
     if (post_id && !isNaN(Number(post_id))) {
       try {
@@ -371,7 +364,7 @@ class NovelFire implements Plugin.PluginBase {
     }
 
     // Fallback only works for multiples of 100
-    const length = parseInt(this.pageLength) || -1;
+    const length = this.pageLength ? 100 : -1;
     if (length === 100) {
       const url = `${this.site}${novelPath}/chapters?page=${page}`;
       const result = await fetchApi(url);
