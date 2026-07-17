@@ -9,9 +9,9 @@ import { storage } from '@libs/storage';
 class NovelFire implements Plugin.PluginBase {
   id = 'novelfire';
   name = 'Novel Fire';
-  version = '1.4.3';
+  version = '1.4.4';
   icon = 'src/en/novelfire/icon.png';
-  site = 'https://novelfire.net/';
+  site = 'https://novelphoenix.com/';
   webStorageUtilized = true;
   novelList = new Set<string>();
   draw = 0;
