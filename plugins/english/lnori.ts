@@ -1,4 +1,5 @@
-import { fetchText } from '@libs/fetch';
+import { fetchApi } from '@libs/fetch';
+import { storage } from '@libs/storage';
 import { Plugin } from '@/types/plugin';
 import { Filters, FilterTypes } from '@libs/filterInputs';
 import { load as parseHTML } from 'cheerio';
@@ -9,7 +10,54 @@ class LnorisPlugin implements Plugin.PluginBase {
   name = 'LNORI';
   icon = 'src/en/lnori/icon.png';
   site = 'https://lnori.com/';
-  version = '1.0.0';
+  version = '1.1.0';
+  webStorageUtilized = true;
+
+  private async fetchPage(url: string): Promise<string> {
+    const cached = storage.get<string>(url);
+    if (cached) return cached;
+    const body = await (await fetchApi(url)).text();
+    // cache for 30 minutes
+    storage.set(url, body, 30 * 60 * 1000);
+    return body;
+  }
+
+  private extractAppData(html: string): Record<string, unknown> | null {
+    const match = html.match(
+      /<script[^>]*id="app-data"[^>]*>([\s\S]*?)<\/script>/,
+    );
+    if (!match?.[1]) return null;
+    try {
+      return JSON.parse(match[1]);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Run async tasks with concurrency limit. Avoids flooding mobile network
+   * with 30+ parallel requests that compete for bandwidth.
+   */
+  private async asyncPool<T, R>(
+    items: T[],
+    processor: (item: T) => Promise<R>,
+    limit = 5,
+  ): Promise<R[]> {
+    const results: R[] = new Array(items.length);
+    let nextIndex = 0;
+
+    const worker = async (): Promise<void> => {
+      while (nextIndex < items.length) {
+        const idx = nextIndex++;
+        results[idx] = await processor(items[idx]);
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+    );
+    return results;
+  }
 
   private async getLibraryNovels(): Promise<
     {
@@ -19,7 +67,7 @@ class LnorisPlugin implements Plugin.PluginBase {
     }[]
   > {
     const url = this.site + 'library';
-    const body = await fetchText(url);
+    const body = await this.fetchPage(url);
     const $ = parseHTML(body);
 
     const parsedList: {
@@ -91,152 +139,149 @@ class LnorisPlugin implements Plugin.PluginBase {
   }
 
   async parseNovel(novelPath: string): Promise<Plugin.SourceNovel> {
-    const url = this.site + novelPath;
-    const body = await fetchText(url);
-    const $ = parseHTML(body);
+    const body = await this.fetchPage(this.site + novelPath);
+
+    const loadedCheerio = parseHTML(body);
+
+    const novelInfo = loadedCheerio(
+      'script[type="application/ld+json"]',
+    ).text();
+
+    let parsed: {
+      name?: string;
+      image?: string;
+      description?: string;
+      author?: { name?: string } | { name?: string }[];
+      genre?: string;
+      hasPart?: { url?: string; name?: string }[];
+    } = {};
+    try {
+      parsed = JSON.parse(novelInfo);
+    } catch {
+      // JSON-LD missing or malformed — fields will fall back to defaults
+    }
+
+    const name =
+      parsed.name || loadedCheerio('.hero-card h1.s-title').text().trim();
+    const src = loadedCheerio('.hero-card img').attr('src');
+    const cover = src
+      ? src.startsWith('/')
+        ? this.site + src.slice(1)
+        : src
+      : defaultCover;
+    const summary =
+      parsed.description ||
+      loadedCheerio('section.desc-box p.description')
+        .map((_, el) => loadedCheerio(el).text().trim())
+        .get()
+        .filter(Boolean)
+        .join('\n\n');
+    let author = [parsed.author]
+      .flat()
+      .map(a => a?.name)
+      .filter(Boolean)
+      .join(', ');
+    if (!author) {
+      author = loadedCheerio('.hero-card p.author').text().trim();
+    }
+
+    const genres =
+      parsed.genre ||
+      loadedCheerio('ul.tags-track a')
+        .map((_, el) => loadedCheerio(el).text().trim())
+        .get()
+        .filter(Boolean)
+        .join(',');
 
     const novel: Plugin.SourceNovel = {
       path: novelPath,
-      name: $('.hero-card h1.s-title').text().trim() || 'Untitled',
+      name: name || 'Untitled',
+      cover,
+      summary,
+      author,
+      genres,
+      chapters: [],
     };
 
-    const coverUrl = $('.hero-card .cover-wrap img').attr('src');
-    if (coverUrl) {
-      novel.cover = coverUrl.startsWith('/')
-        ? this.site + coverUrl.substring(1)
-        : coverUrl;
-    } else {
-      novel.cover = defaultCover;
-    }
-
-    const dataTagsAttr = $('nav.tags-box.desktop').attr('data-tags');
-    if (dataTagsAttr) {
-      try {
-        const parsedTags = JSON.parse(dataTagsAttr);
-        novel.genres = parsedTags
-          .map((t: { name: string }) => t.name)
-          .join(', ');
-      } catch (e) {
-        // Fallback
-      }
-    }
-
-    if (!novel.genres) {
-      const genres: string[] = [];
-      $('nav.tags-box.desktop a, nav.tags-box a').each((i, el) => {
-        const text = $(el).text().trim();
-        if (text) genres.push(text);
-      });
-      novel.genres = genres.join(', ');
-    }
-
-    const summaryParagraphs: string[] = [];
-    $('section.desc-box p.description').each((i, el) => {
-      const text = $(el).text().trim();
-      if (text) summaryParagraphs.push(text);
-    });
-    novel.summary = summaryParagraphs.join('\n\n');
-
-    novel.author = $('.hero-card p.author').text().trim();
-
-    // Map unique volume URLs
+    // try JSON-LD first
     const volumeMap: Record<string, string> = {};
-    $('a[href^="/book/"]').each((i, el) => {
-      const href = $(el).attr('href');
-      const text = $(el).text().trim().replace(/\s+/g, ' ');
-      if (href) {
-        if (
-          !volumeMap[href] ||
-          (text && text.length > volumeMap[href].length)
-        ) {
-          volumeMap[href] = text;
+    if (parsed.hasPart && Array.isArray(parsed.hasPart)) {
+      for (const part of parsed.hasPart) {
+        if (part?.url) {
+          const volPath = part.url.startsWith(this.site)
+            ? part.url.slice(this.site.length)
+            : part.url;
+          volumeMap[volPath] = part.name || '';
         }
       }
-    });
+    }
 
-    const getVolumeName = (href: string, text: string) => {
-      let cleanText = text.replace(/Start Reading/gi, '').trim();
-      if (!cleanText) {
-        const parts = href.split('/');
-        const slug = parts[parts.length - 1] || parts[parts.length - 2] || '';
-        cleanText = slug
-          .split('-')
-          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-          .join(' ');
-      }
-      return cleanText;
+    // Fallback to HTML link scraping
+    if (Object.keys(volumeMap).length === 0) {
+      loadedCheerio('section.vol-grid article').each((i, el) => {
+        const $el = loadedCheerio(el);
+        const href = $el.find('a.stretched-link').attr('href');
+        const title = $el.find('.card-title span').text().trim();
+        const subtitle = $el.find('.card-meta span').text().trim();
+        if (href && title) {
+          volumeMap[href.startsWith('/') ? href.slice(1) : href] = subtitle
+            ? `${title}: ${subtitle}`
+            : title;
+        }
+      });
+    }
+
+    const getVolumeName = (_href: string, text: string) => {
+      const match = text.match(/(Vol(?:ume)?\.?\s*\d+(?:[-.\s]\d+)?)/i);
+      return match ? match[1] : text;
     };
 
     const volumeUrls = Object.keys(volumeMap);
-    const volumePromises = volumeUrls.map(async volUrl => {
-      const fullVolUrl = this.site.replace(/\/$/, '') + volUrl;
-      const volHtml = await fetchText(fullVolUrl);
-      const $vol = parseHTML(volHtml);
 
-      const volChapters: Plugin.ChapterItem[] = [];
-      const tocLinks = $vol(
-        'nav.toc-view a[href^="#"], nav#toc-list a[href^="#"]',
-      );
+    // Process volumes with concurrency limit (5)
+    const chapters2D = await this.asyncPool(
+      volumeUrls,
+      async volUrl => {
+        const fullVolUrl = this.site + volUrl;
+        const volHtml = await this.fetchPage(fullVolUrl);
+        const volTitle = getVolumeName(volUrl, volumeMap[volUrl]);
+        const volChapters: Plugin.ChapterItem[] = [];
 
-      if (tocLinks.length > 0) {
-        tocLinks.each((i, el) => {
+        const appData = this.extractAppData(volHtml);
+        if (appData?.hasPart && Array.isArray(appData.hasPart)) {
+          for (const part of appData.hasPart) {
+            const p = part as Record<string, unknown>;
+            if (p?.url && typeof p.url === 'string') {
+              const name =
+                typeof p.name === 'string'
+                  ? p.name.trim().replace(/\s+/g, ' ')
+                  : '';
+              volChapters.push({
+                name: name ? `${volTitle} - ${name}` : volTitle,
+                path: volUrl + p.url,
+              });
+            }
+          }
+          return volChapters;
+        }
+
+        // fallback to cheerio
+        const $vol = parseHTML(volHtml);
+        $vol('#toc-list a').each((i, el) => {
           const href = $vol(el).attr('href');
           if (!href) return;
-          const id = href.substring(1);
-          const tocTitle = $vol(el).text().trim().replace(/\s+/g, ' ');
-
-          const section = $vol(`section#${id}`);
-          const h2Title = section
-            .find('h2.chapter-title, h2, h3')
-            .first()
-            .text()
-            .trim();
-
-          const chapterName =
-            tocTitle || h2Title || `Page ${id.replace(/\D/g, '')}`;
-
-          const volTitle = getVolumeName(volUrl, volumeMap[volUrl]);
-          let path = volUrl;
-          if (path.startsWith('/')) {
-            path = path.substring(1);
-          }
-          path = path + '#' + id;
-
+          const name =
+            $vol(el).attr('title') ||
+            $vol(el).text().trim().replace(/\s+/g, ' ');
           volChapters.push({
-            name: `${volTitle} - ${chapterName}`,
-            path,
+            name: `${volTitle} - ${name}`,
+            path: volUrl + href,
           });
         });
-      } else {
-        $vol('section.chapter').each((i, el) => {
-          const id = $vol(el).attr('id');
-          if (id) {
-            const h2Title = $vol(el)
-              .find('h2.chapter-title, h2, h3')
-              .first()
-              .text()
-              .trim();
-
-            if (!h2Title) return;
-
-            const volTitle = getVolumeName(volUrl, volumeMap[volUrl]);
-            let path = volUrl;
-            if (path.startsWith('/')) {
-              path = path.substring(1);
-            }
-            path = path + '#' + id;
-
-            volChapters.push({
-              name: `${volTitle} - ${h2Title}`,
-              path,
-            });
-          }
-        });
-      }
-      return volChapters;
-    });
-
-    const chapters2D = await Promise.all(volumePromises);
+        return volChapters;
+      },
+      5,
+    );
     const chapters = chapters2D.flat();
 
     novel.chapters = chapters.map((chap, idx) => ({
@@ -248,98 +293,27 @@ class LnorisPlugin implements Plugin.PluginBase {
   }
 
   async parseChapter(chapterPath: string): Promise<string> {
-    const [pathWithoutAnchor, anchor] = chapterPath.split('#');
-    const url = this.site.replace(/\/$/, '') + '/' + pathWithoutAnchor;
+    const [base, anchor] = chapterPath.split('#');
+    const $ = parseHTML(await this.fetchPage(this.site + base));
 
-    const body = await fetchText(url);
-    const $ = parseHTML(body);
+    $('.chapter-title').remove();
+    const nextId = $(`#toc-list a[href="#${anchor}"]`)
+      .parent()
+      .next()
+      .find('a')
+      .attr('href')
+      ?.slice(1);
+    const allSections = $('section[id*=page]');
+    const start = allSections.index($(`section#${anchor}`));
+    if (start === -1) return '';
 
-    const tocAnchors: string[] = [];
-    $('nav.toc-view a[href^="#"], nav#toc-list a[href^="#"]').each((i, el) => {
-      const href = $(el).attr('href');
-      if (href) {
-        tocAnchors.push(href.substring(1));
-      }
-    });
+    const end = nextId ? allSections.index($(`section#${nextId}`)) : -1;
 
-    const chapterSelector = anchor ? `section#${anchor}` : 'section.chapter';
-    const section = $(chapterSelector);
-
-    if (!section.length) {
-      throw new Error(`Chapter section not found: ${chapterPath}`);
-    }
-
-    if (tocAnchors.length > 0 && anchor) {
-      const currentIndex = tocAnchors.indexOf(anchor);
-      const nextAnchor =
-        currentIndex !== -1 && currentIndex + 1 < tocAnchors.length
-          ? tocAnchors[currentIndex + 1]
-          : null;
-
-      const pagesContent: string[] = [];
-      let stepSection = section;
-
-      while (stepSection.length) {
-        const mainContent = stepSection.find('.main').length
-          ? stepSection.find('.main').clone()
-          : stepSection.clone();
-
-        mainContent.find('h2, h3, .chapter-title').remove();
-
-        mainContent.find('img').each((i, el) => {
-          const src = $(el).attr('src');
-          if (src && src.startsWith('/')) {
-            $(el).attr('src', this.site.replace(/\/$/, '') + src);
-          }
-        });
-
-        mainContent.find('source').each((i, el) => {
-          const srcset = $(el).attr('srcset');
-          if (srcset && srcset.startsWith('/')) {
-            $(el).attr('srcset', this.site.replace(/\/$/, '') + srcset);
-          }
-        });
-
-        const html = mainContent.html();
-        if (html) {
-          pagesContent.push(html);
-        }
-
-        let nextSibling = stepSection.next();
-        while (nextSibling.length && !nextSibling.is('section.chapter')) {
-          nextSibling = nextSibling.next();
-        }
-        stepSection = nextSibling;
-
-        if (nextAnchor && stepSection.attr('id') === nextAnchor) {
-          break;
-        }
-      }
-
-      return pagesContent.join('\n');
-    } else {
-      const mainContent = section.find('.main').length
-        ? section.find('.main').clone()
-        : section.clone();
-
-      mainContent.find('h2, h3, .chapter-title').remove();
-
-      mainContent.find('img').each((i, el) => {
-        const src = $(el).attr('src');
-        if (src && src.startsWith('/')) {
-          $(el).attr('src', this.site.replace(/\/$/, '') + src);
-        }
-      });
-
-      mainContent.find('source').each((i, el) => {
-        const srcset = $(el).attr('srcset');
-        if (srcset && srcset.startsWith('/')) {
-          $(el).attr('srcset', this.site.replace(/\/$/, '') + srcset);
-        }
-      });
-
-      return mainContent.html() || '';
-    }
+    return allSections
+      .slice(start, end !== -1 ? end : allSections.length)
+      .map((_, el) => $(el).html() || '')
+      .get()
+      .join('<hr>');
   }
 
   async searchNovels(
