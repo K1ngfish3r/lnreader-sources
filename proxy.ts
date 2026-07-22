@@ -11,13 +11,15 @@ const proxy = httpProxy.createProxyServer({});
 const settings: ServerSetting = {
   CLIENT_HOST: 'http://localhost:3000',
   fetchMode: FetchMode.PROXY,
+  cookies: '',
+  siteCookies: {},
+  usePerSiteCookies: false,
   disAllowedRequestHeaders: [
     'sec-ch-ua',
     'sec-ch-ua-mobile',
     'sec-ch-ua-platform',
     'sec-fetch-site',
     'origin',
-    'sec-fetch-site',
     'sec-fetch-dest',
     'pragma',
   ],
@@ -62,6 +64,19 @@ const proxySettingMiddleware: Connect.NextHandleFunction = (req, res) => {
   });
 };
 
+function getCookiesForHost(hostname: string): string | undefined {
+  if (settings.usePerSiteCookies && settings.siteCookies) {
+    // exact match
+    if (settings.siteCookies[hostname]) return settings.siteCookies[hostname];
+    // parent domain match: key "source.com" matches "www.source.com", "api.source.com"
+    for (const [site, cookie] of Object.entries(settings.siteCookies)) {
+      if (hostname.endsWith('.' + site)) return cookie;
+    }
+    return undefined; // per-site mode: no cookie for unmatched hosts
+  }
+  return settings.cookies; // global mode: same cookie for all requests
+}
+
 const proxyHandlerMiddle: Connect.NextHandleFunction = (req, res) => {
   const rawUrl = 'https:' + req.url;
   if (req.headers['access-control-request-method']) {
@@ -97,7 +112,6 @@ const proxyHandlerMiddle: Connect.NextHandleFunction = (req, res) => {
         }
       }
       req.headers['sec-fetch-mode'] = 'cors';
-      if (settings.cookies) req.headers['cookie'] = settings.cookies;
       if (!settings.useUserAgent) delete req.headers['user-agent'];
       req.headers.host = _url.host;
       req.url = _url.toString();
@@ -114,6 +128,133 @@ const proxyHandlerMiddle: Connect.NextHandleFunction = (req, res) => {
   }
 };
 
+function curlRequest(
+  url: string,
+  method: string,
+  req: Connect.IncomingMessage,
+  bodyBuffer: Buffer,
+  redirectCount: number,
+  res: Connect.ServerResponse,
+) {
+  if (redirectCount >= 5) {
+    res.statusCode = 508;
+    res.end('Too many redirects');
+    return;
+  }
+
+  const _url = new URL(url);
+  const args = ['-X', method, '-s', '-D', '-', _url.href];
+
+  if (settings.useUserAgent && req.headers['user-agent'])
+    args.push('-H', 'User-Agent: ' + req.headers['user-agent']);
+  const hostCookie = getCookiesForHost(_url.hostname);
+  if (hostCookie) args.push('-H', 'Cookie: ' + hostCookie);
+  if (req.headers.origin2) args.push('-H', 'Origin: ' + req.headers.origin2);
+  if (req.headers['content-type'] && bodyBuffer.length > 0)
+    args.push('-H', 'Content-Type: ' + req.headers['content-type']);
+
+  if (bodyBuffer.length > 0) args.push('--data-binary', '@-');
+
+  console.log('\x1b[36m', '----------------');
+  console.log(
+    'Making CURL request - at ' +
+      new Date().toLocaleTimeString() +
+      '\n  url: ' +
+      _url.href +
+      '\n  headers:',
+  );
+  args.forEach((a, i) => {
+    if (args[i - 1] === '-H') console.log('\t', '\x1b[32m', a, '\x1b[37m');
+  });
+  console.log('\x1b[36m', '----------------');
+
+  const child = spawn('curl', args);
+
+  if (bodyBuffer.length > 0) {
+    child.stdin.write(bodyBuffer);
+    child.stdin.end();
+  }
+
+  const stdoutChunks: Buffer[] = [];
+  child.stdout.on('data', chunk => stdoutChunks.push(Buffer.from(chunk)));
+
+  let stderr = '';
+  child.stderr.on('data', chunk => (stderr += chunk));
+
+  child.on('close', code => {
+    if (code !== 0) {
+      console.error(stderr);
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.write('curl error code: ' + code + '\n' + stderr);
+        res.end();
+      }
+      return;
+    }
+
+    const output = Buffer.concat(stdoutChunks).toString('utf-8');
+    const headerEnd = output.indexOf('\r\n\r\n');
+    if (headerEnd === -1) {
+      res.statusCode = 200;
+      res.write(output);
+      res.end();
+      return;
+    }
+
+    const headerBlock = output.slice(0, headerEnd);
+    const body = output.slice(headerEnd + 4);
+
+    const statusMatch = headerBlock.match(/^HTTP\/[\d.]+\s+(\d+)/m);
+    const statusCode = statusMatch ? parseInt(statusMatch[1]) : 200;
+
+    if ([301, 302, 303, 307, 308].includes(statusCode)) {
+      const locMatch = headerBlock.match(/^location:\s*(.+)$/im);
+      if (locMatch) {
+        try {
+          const redirectUrl = new URL(locMatch[1].trim(), _url.href);
+          let nextMethod = method;
+          let nextBody = bodyBuffer;
+          if ([301, 302, 303].includes(statusCode)) {
+            nextMethod = 'GET';
+            nextBody = Buffer.alloc(0);
+          }
+          curlRequest(
+            redirectUrl.href,
+            nextMethod,
+            req,
+            nextBody,
+            redirectCount + 1,
+            res,
+          );
+          return;
+        } catch {
+          console.error('Redirect URL parse error:', locMatch[1]);
+        }
+      }
+    }
+
+    res.statusCode = statusCode;
+
+    const headerLines = headerBlock.split('\r\n').slice(1);
+    for (const line of headerLines) {
+      const ci = line.indexOf(':');
+      if (ci === -1) continue;
+      const key = line.slice(0, ci).trim().toLowerCase();
+      const val = line.slice(ci + 1).trim();
+      if (!settings.disAllowResponseHeaders.includes(key)) {
+        res.setHeader(key, val);
+      }
+    }
+
+    res.write(body);
+    res.end();
+  });
+
+  res.on('close', () => {
+    if (!child.killed) child.kill();
+  });
+}
+
 const proxyRequest: Connect.SimpleHandleFunction = (req, res) => {
   const _url = new URL(req.url || '');
   console.log('\x1b[36m', '----------------');
@@ -128,10 +269,13 @@ const proxyRequest: Connect.SimpleHandleFunction = (req, res) => {
   console.log('\x1b[36m', '----------------');
 
   if (settings.fetchMode === FetchMode.PROXY) {
+    const hostCookie = getCookiesForHost(_url.hostname);
+    if (hostCookie) req.headers['cookie'] = hostCookie;
+    else delete req.headers['cookie'];
     proxy.web(
       req,
       res,
-      { target: _url.origin, selfHandleResponse: true, followRedirects: true },
+      { target: _url.origin, selfHandleResponse: true },
       err => {
         console.error('Proxy target error:', err);
         res.statusCode = 500;
@@ -149,50 +293,14 @@ const proxyRequest: Connect.SimpleHandleFunction = (req, res) => {
     const bodyBuffer = Buffer.concat(chunks);
 
     if (settings.fetchMode === FetchMode.CURL) {
-      const args = ['-X', method, '-sL', _url.href];
-
-      if (settings.useUserAgent && req.headers['user-agent'])
-        args.push('-H', `User-Agent: ${req.headers['user-agent']}`);
-      if (settings.cookies) args.push('-H', `Cookie: ${settings.cookies}`);
-      if (req.headers.origin2)
-        args.push('-H', `Origin: ${req.headers.origin2}`);
-      if (req.headers['content-type'])
-        args.push('-H', `Content-Type: ${req.headers['content-type']}`);
-
-      if (bodyBuffer.length > 0) {
-        args.push('--data-binary', '@-'); // @- tells curl to read body from stdin
-      }
-
-      const child = spawn('curl', args);
-
-      if (bodyBuffer.length > 0) {
-        child.stdin.write(bodyBuffer);
-        child.stdin.end();
-      }
-
-      res.statusCode = 200;
-      child.stdout.pipe(res);
-
-      let stderr = '';
-      child.stderr.on('data', chunk => (stderr += chunk));
-
-      child.on('close', code => {
-        if (code !== 0) {
-          console.error(stderr);
-          // Only send error if headers haven't been sent by piping yet
-          if (!res.headersSent) {
-            res.statusCode = 500;
-            res.write(`curl error code: ${code}\n${stderr}`);
-            res.end();
-          }
-        }
-      });
+      curlRequest(_url.href, method, req, bodyBuffer, 0, res);
     } else if (settings.fetchMode === FetchMode.NODE_FETCH) {
       const headers = new Headers();
 
       if (settings.useUserAgent && req.headers['user-agent'])
         headers.append('user-agent', req.headers['user-agent'] as string);
-      if (settings.cookies) headers.append('cookie', settings.cookies);
+      const hostCookie = getCookiesForHost(_url.hostname);
+      if (hostCookie) headers.append('cookie', hostCookie);
       if (req.headers.origin2)
         headers.append('origin', req.headers.origin2 as string);
       if (req.headers['content-type'])
@@ -255,6 +363,7 @@ proxy.on('proxyRes', function (proxyRes, req, res) {
         }
 
         req.removeAllListeners();
+        proxyRes.destroy();
         proxyRequest(req, res);
         return;
       } catch (err) {
@@ -290,7 +399,11 @@ proxy.on('proxyRes', function (proxyRes, req, res) {
         } else if (contentEncoding.includes('gzip')) {
           decompressedBuffer = gunzipSync(compressedBuffer);
         } else if (contentEncoding.includes('zstd')) {
-          decompressedBuffer = zstdDecompressSync(compressedBuffer);
+          try {
+            decompressedBuffer = zstdDecompressSync(compressedBuffer);
+          } catch {
+            decompressedBuffer = compressedBuffer;
+          }
         } else {
           decompressedBuffer = compressedBuffer;
         }
