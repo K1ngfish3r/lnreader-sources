@@ -22,59 +22,63 @@ class LnorisPlugin implements Plugin.PluginBase {
     },
   };
 
-  private async fetchPage(url: string): Promise<string> {
+  private libraryCache: CachedNovel[] | null = null;
+
+  private async fetchPage(
+    url: string,
+    ttl = 8 * 60 * 60 * 1000,
+  ): Promise<string> {
     if (storage.get('clearCache')) {
       storage.clearAll();
+      this.libraryCache = null;
       storage.set('clearCache', false);
     }
     const cached = storage.get<string>(url);
     if (cached) return cached;
     const body = await (await fetchApi(url)).text();
-    // cache for 8 hours
-    storage.set(url, body, 8 * 60 * 60 * 1000);
+    storage.set(url, body, ttl);
     return body;
   }
 
   private extractAppData(html: string): Record<string, unknown> | null {
-    const match = html.match(
-      /<script[^>]*id="app-data"[^>]*>([\s\S]*?)<\/script>/,
-    );
-    if (!match?.[1]) return null;
+    const scriptContent: string[] = [];
+    let inScript = false;
+
+    const parser = new Parser({
+      onopentag: (name, attribs) => {
+        if (name === 'script' && attribs.id === 'app-data') {
+          inScript = true;
+        }
+      },
+      ontext: text => {
+        if (inScript) {
+          scriptContent.push(text);
+        }
+      },
+      onclosetag: name => {
+        if (name === 'script') {
+          inScript = false;
+        }
+      },
+    });
+
+    parser.write(html);
+    parser.end();
+
+    if (!scriptContent.length) return null;
     try {
-      return JSON.parse(match[1]);
+      return JSON.parse(scriptContent.join(''));
     } catch {
       return null;
     }
   }
 
-  /**
-   * Run async tasks with concurrency limit. Avoids flooding mobile network
-   * with 30+ parallel requests that compete for bandwidth.
-   */
-  private async asyncPool<T, R>(
-    items: T[],
-    processor: (item: T) => Promise<R>,
-    limit = 5,
-  ): Promise<R[]> {
-    const results: R[] = new Array(items.length);
-    let nextIndex = 0;
-
-    const worker = async (): Promise<void> => {
-      while (nextIndex < items.length) {
-        const idx = nextIndex++;
-        results[idx] = await processor(items[idx]);
-      }
-    };
-
-    await Promise.all(
-      Array.from({ length: Math.min(limit, items.length) }, () => worker()),
-    );
-    return results;
-  }
-
   private async getLibraryNovels(): Promise<CachedNovel[]> {
+    if (this.libraryCache) return this.libraryCache;
+
     const url = this.site + 'library';
-    const body = await this.fetchPage(url);
+    // library gets 1 hour cache
+    const body = await this.fetchPage(url, 1 * 60 * 60 * 1000);
     let tempNovel: Partial<Plugin.NovelItem> & {
       author?: string;
       tags?: string;
@@ -141,11 +145,12 @@ class LnorisPlugin implements Plugin.PluginBase {
     parser.write(body);
     parser.end();
 
+    this.libraryCache = novels;
     return novels;
   }
 
   async popularNovels(
-    _pageNo: number,
+    pageNo: number,
     { filters }: Plugin.PopularNovelsOptions<typeof this.filters>,
   ): Promise<Plugin.NovelItem[]> {
     const parsedList = await this.getLibraryNovels();
@@ -188,7 +193,10 @@ class LnorisPlugin implements Plugin.PluginBase {
         break;
     }
 
-    return filtered.map(item => item.novel);
+    const novels = filtered.map(item => item.novel);
+    if (filters.reverse.value) novels.reverse();
+    const start = (pageNo - 1) * 36;
+    return novels.slice(start, start + 36);
   }
 
   async parseNovel(novelPath: string): Promise<Plugin.SourceNovel> {
@@ -237,7 +245,6 @@ class LnorisPlugin implements Plugin.PluginBase {
             break;
           case 'img':
             if (state === ParsingState.HeroCard) {
-              novel.name = attribs.alt;
               novel.cover = attribs.src;
             }
             break;
@@ -273,6 +280,11 @@ class LnorisPlugin implements Plugin.PluginBase {
           case 'footer':
             if (state === ParsingState.VolArticle) {
               pushState(ParsingState.VolCardMeta);
+            }
+            break;
+          case 'button':
+            if (state === ParsingState.HeroCard) {
+              novel.name = attribs['data-series-title'];
             }
             break;
         }
@@ -369,6 +381,9 @@ class LnorisPlugin implements Plugin.PluginBase {
             }
           }
         }
+        for (const key of Object.keys(volumeMap))
+          if (novel.name && volumeMap[key].includes(novel.name))
+            volumeMap[key] = volumeMap[key].replace(novel.name, '-');
       },
     });
 
@@ -382,12 +397,9 @@ class LnorisPlugin implements Plugin.PluginBase {
 
     const volumeUrls = Object.keys(volumeMap);
 
-    // Process volumes with concurrency limit (5)
-    const chapters2D = await this.asyncPool(
-      volumeUrls,
-      async volUrl => {
-        const fullVolUrl = this.site + volUrl;
-        const volHtml = await this.fetchPage(fullVolUrl);
+    const chapters2D = await Promise.all(
+      volumeUrls.map(async volUrl => {
+        const volHtml = await this.fetchPage(this.site + volUrl);
         const volTitle = getVolumeName(volUrl, volumeMap[volUrl]);
         const volChapters: Plugin.ChapterItem[] = [];
 
@@ -409,7 +421,7 @@ class LnorisPlugin implements Plugin.PluginBase {
           return volChapters;
         }
 
-        // Fallback: htmlparser2 for #toc-list
+        // Fallback #toc-list
         let inTocList = false;
         const tocParser = new Parser({
           onopentag: (name, attribs) => {
@@ -432,8 +444,7 @@ class LnorisPlugin implements Plugin.PluginBase {
         tocParser.write(volHtml);
         tocParser.end();
         return volChapters;
-      },
-      5,
+      }),
     );
     const chapters = chapters2D.flat();
 
@@ -469,19 +480,23 @@ class LnorisPlugin implements Plugin.PluginBase {
       .join('<hr>');
   }
 
-  async searchNovels(searchTerm: string): Promise<Plugin.NovelItem[]> {
-    const parsedList = await this.getLibraryNovels();
-
+  async searchNovels(
+    searchTerm: string,
+    pageNo: number,
+  ): Promise<Plugin.NovelItem[]> {
     const term = searchTerm.toLowerCase();
-    const filteredList = parsedList.filter(item => {
-      return (
-        item.novel.name.toLowerCase().includes(term) ||
-        item.author.toLowerCase().includes(term) ||
-        item.tags.some(t => t.includes(term))
-      );
-    });
+    const parsedList = await this.getLibraryNovels();
+    const filtered = parsedList
+      .filter(
+        item =>
+          item.novel.name.toLowerCase().includes(term) ||
+          item.author.toLowerCase().includes(term) ||
+          item.tags.some(t => t.includes(term)),
+      )
+      .map(item => item.novel);
 
-    return filteredList.map(item => item.novel);
+    const start = (pageNo - 1) * 36;
+    return filtered.slice(start, start + 36);
   }
 
   // resolveUrl = (path: string, _isNovel?: boolean) => {
@@ -499,6 +514,11 @@ class LnorisPlugin implements Plugin.PluginBase {
         { label: 'Volumes', value: 'volumes' },
       ],
       type: FilterTypes.Picker,
+    },
+    reverse: {
+      label: 'Reverse Results',
+      value: false,
+      type: FilterTypes.Switch,
     },
     genre: {
       label: 'Genre',
