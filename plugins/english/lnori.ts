@@ -24,53 +24,23 @@ class LnorisPlugin implements Plugin.PluginBase {
 
   private libraryCache: CachedNovel[] | null = null;
 
-  private async fetchPage(
-    url: string,
-    ttl = 8 * 60 * 60 * 1000,
-  ): Promise<string> {
+  private clearCache() {
     if (storage.get('clearCache')) {
       storage.clearAll();
       this.libraryCache = null;
       storage.set('clearCache', false);
     }
+  }
+
+  private async fetchPage(
+    url: string,
+    ttl = 8 * 60 * 60 * 1000,
+  ): Promise<string> {
     const cached = storage.get<string>(url);
     if (cached) return cached;
     const body = await (await fetchApi(url)).text();
     storage.set(url, body, ttl);
     return body;
-  }
-
-  private extractAppData(html: string): Record<string, unknown> | null {
-    const scriptContent: string[] = [];
-    let inScript = false;
-
-    const parser = new Parser({
-      onopentag: (name, attribs) => {
-        if (name === 'script' && attribs.id === 'app-data') {
-          inScript = true;
-        }
-      },
-      ontext: text => {
-        if (inScript) {
-          scriptContent.push(text);
-        }
-      },
-      onclosetag: name => {
-        if (name === 'script') {
-          inScript = false;
-        }
-      },
-    });
-
-    parser.write(html);
-    parser.end();
-
-    if (!scriptContent.length) return null;
-    try {
-      return JSON.parse(scriptContent.join(''));
-    } catch {
-      return null;
-    }
   }
 
   private async getLibraryNovels(): Promise<CachedNovel[]> {
@@ -200,6 +170,7 @@ class LnorisPlugin implements Plugin.PluginBase {
   }
 
   async parseNovel(novelPath: string): Promise<Plugin.SourceNovel> {
+    this.clearCache();
     const body = await this.fetchPage(this.site + novelPath);
 
     const genreArray = new Set<string>();
@@ -382,8 +353,8 @@ class LnorisPlugin implements Plugin.PluginBase {
           }
         }
         for (const key of Object.keys(volumeMap))
-          if (novel.name && volumeMap[key].includes(novel.name))
-            volumeMap[key] = volumeMap[key].replace(novel.name, '-');
+          if (novel.name && volumeMap[key].startsWith(novel.name))
+            volumeMap[key] = '-' + volumeMap[key].slice(novel.name.length);
       },
     });
 
@@ -397,55 +368,50 @@ class LnorisPlugin implements Plugin.PluginBase {
 
     const volumeUrls = Object.keys(volumeMap);
 
-    const chapters2D = await Promise.all(
-      volumeUrls.map(async volUrl => {
-        const volHtml = await this.fetchPage(this.site + volUrl);
-        const volTitle = getVolumeName(volUrl, volumeMap[volUrl]);
-        const volChapters: Plugin.ChapterItem[] = [];
+    const chapters2D: Plugin.ChapterItem[][] = [];
+    for (let i = 0; i < volumeUrls.length; i += 5) {
+      const batch = volumeUrls.slice(i, i + 5);
+      const batchResults = await Promise.all(
+        batch.map(async volUrl => {
+          const volHtml = await this.fetchPage(this.site + volUrl);
+          const volTitle = getVolumeName(volUrl, volumeMap[volUrl]);
+          const volChapters: Plugin.ChapterItem[] = [];
 
-        const appData = this.extractAppData(volHtml);
-        if (appData?.hasPart && Array.isArray(appData.hasPart)) {
-          for (const part of appData.hasPart) {
-            const p = part as Record<string, unknown>;
-            if (p?.url && typeof p.url === 'string') {
-              const name =
-                typeof p.name === 'string'
-                  ? p.name.trim().replace(/\s+/g, ' ')
+          let inTocList = false;
+          const tocParser = new Parser({
+            onopentag: (name, attribs) => {
+              if (name === 'nav' && attribs.id === 'toc-list') {
+                inTocList = true;
+                return;
+              }
+              if (!inTocList) return;
+              if (name === 'a') {
+                const href = attribs.href;
+                if (!href) return;
+                const chapName = attribs.title
+                  ? attribs.title.trim().replace(/\s+/g, ' ')
                   : '';
-              volChapters.push({
-                name: name ? `${volTitle} - ${name}` : volTitle,
-                path: volUrl + p.url,
-              });
-            }
-          }
+                volChapters.push({
+                  name: `${volTitle} - ${chapName}`,
+                  path: volUrl + href,
+                });
+              }
+            },
+            onclosetag: name => {
+              if (!inTocList) return;
+              if (inTocList && name === 'nav') {
+                inTocList = false;
+              }
+            },
+          });
+
+          tocParser.write(volHtml);
+          tocParser.end();
           return volChapters;
-        }
-
-        // Fallback #toc-list
-        let inTocList = false;
-        const tocParser = new Parser({
-          onopentag: (name, attribs) => {
-            if (name === 'nav' && attribs.id === 'toc-list') {
-              inTocList = true;
-            } else if (inTocList && name === 'a') {
-              const href = attribs.href;
-              if (!href) return;
-              const chapName = attribs.title
-                ? attribs.title.trim().replace(/\s+/g, ' ')
-                : '';
-              volChapters.push({
-                name: `${volTitle} - ${chapName}`,
-                path: volUrl + href,
-              });
-            }
-          },
-        });
-
-        tocParser.write(volHtml);
-        tocParser.end();
-        return volChapters;
-      }),
-    );
+        }),
+      );
+      chapters2D.push(...batchResults);
+    }
     const chapters = chapters2D.flat();
 
     novel.chapters = chapters.map((chap, idx) => ({
