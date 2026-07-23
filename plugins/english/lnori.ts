@@ -369,48 +369,61 @@ class LnorisPlugin implements Plugin.PluginBase {
     const volumeUrls = Object.keys(volumeMap);
 
     const chapters2D: Plugin.ChapterItem[][] = [];
-    for (let i = 0; i < volumeUrls.length; i += 5) {
-      const batch = volumeUrls.slice(i, i + 5);
-      const batchResults = await Promise.all(
-        batch.map(async volUrl => {
-          const volHtml = await this.fetchPage(this.site + volUrl);
-          const volTitle = getVolumeName(volUrl, volumeMap[volUrl]);
-          const volChapters: Plugin.ChapterItem[] = [];
+    for (const volUrl of volumeUrls) {
+      let volHtml: string;
+      try {
+        volHtml = await this.fetchPage(this.site + volUrl);
+      } catch (err) {
+        throw new Error(
+          `Failed to fetch volume: ${volumeMap[volUrl]} (${volUrl}) — ${String(err)}`,
+        );
+      }
+      const volTitle = getVolumeName(volUrl, volumeMap[volUrl]);
+      const volChapters: Plugin.ChapterItem[] = [];
 
-          let inTocList = false;
-          const tocParser = new Parser({
-            onopentag: (name, attribs) => {
-              if (name === 'nav' && attribs.id === 'toc-list') {
-                inTocList = true;
-                return;
-              }
-              if (!inTocList) return;
-              if (name === 'a') {
-                const href = attribs.href;
-                if (!href) return;
-                const chapName = attribs.title
-                  ? attribs.title.trim().replace(/\s+/g, ' ')
-                  : '';
-                volChapters.push({
-                  name: `${volTitle} - ${chapName}`,
-                  path: volUrl + href,
-                });
-              }
-            },
-            onclosetag: name => {
-              if (!inTocList) return;
-              if (inTocList && name === 'nav') {
-                inTocList = false;
-              }
-            },
-          });
+      try {
+        let inTocList = false;
+        const tocParser = new Parser({
+          onopentag: (name, attribs) => {
+            if (name === 'nav' && attribs.id === 'toc-list') {
+              inTocList = true;
+              return;
+            }
+            if (!inTocList) return;
+            if (name === 'a') {
+              const href = attribs.href;
+              if (!href) return;
+              const chapName = attribs.title
+                ? attribs.title.trim().replace(/\s+/g, ' ')
+                : '';
+              volChapters.push({
+                name: `${volTitle} - ${chapName}`,
+                path: volUrl + href,
+              });
+            }
+          },
+          onclosetag: name => {
+            if (!inTocList) return;
+            if (inTocList && name === 'nav') {
+              inTocList = false;
+            }
+          },
+        });
 
-          tocParser.write(volHtml);
-          tocParser.end();
-          return volChapters;
-        }),
-      );
-      chapters2D.push(...batchResults);
+        tocParser.write(volHtml);
+        tocParser.end();
+      } catch (err) {
+        throw new Error(
+          `Failed to parse volume page: ${volumeMap[volUrl]} (${volUrl}) — ${String(err)}`,
+        );
+      }
+
+      if (!volChapters.length) {
+        throw new Error(
+          `No chapters found in volume: ${volumeMap[volUrl]} (${volUrl})`,
+        );
+      }
+      chapters2D.push(volChapters);
     }
     const chapters = chapters2D.flat();
 
