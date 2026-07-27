@@ -9,7 +9,7 @@ import { storage } from '@libs/storage';
 class RoyalRoad implements Plugin.PluginBase {
   id = 'royalroad';
   name = 'Royal Road';
-  version = '2.3.1';
+  version = '2.3.2';
   icon = 'src/en/royalroad/icon.png';
   site = 'https://www.royalroad.com/';
 
@@ -32,7 +32,7 @@ class RoyalRoad implements Plugin.PluginBase {
         if (attribs['class']?.includes('fiction-list-item')) {
           state = ParsingState.Novel;
         }
-        if (state !== ParsingState.Novel) return;
+        if (state === ParsingState.Idle) return;
 
         switch (name) {
           case 'a':
@@ -75,27 +75,23 @@ class RoyalRoad implements Plugin.PluginBase {
     }: Plugin.PopularNovelsOptions<typeof this.filters>,
   ): Promise<Plugin.NovelItem[]> {
     const params = new URLSearchParams({
-      page: page.toString(),
+      ...(page > 1 ? { page: page.toString() } : {}),
+      globalFilters: 'false',
     });
+
     if (showLatestNovels) {
       params.append('orderBy', 'last_update');
     }
-    if (!filters) filters = this.filters || {};
-    for (const key in filters) {
-      if (filters[key as keyof typeof filters].value === '') continue;
-      if (key === 'genres' || key === 'tags' || key === 'content_warnings') {
-        if (filters[key].value.include) {
-          for (const include of filters[key].value.include) {
-            params.append('tagsAdd', include);
-          }
-        }
-        if (filters[key].value.exclude) {
-          for (const exclude of filters[key].value.exclude) {
-            params.append('tagsRemove', exclude);
-          }
-        }
-      } else {
-        params.append(key, String(filters[key as keyof typeof filters].value));
+
+    for (const [key, f] of Object.entries(filters)) {
+      if (f.type === FilterTypes.ExcludableCheckboxGroup) {
+        const { include, exclude } = f.value;
+        include?.forEach(v => params.append('tagsAdd', v));
+        exclude?.forEach(v => params.append('tagsRemove', v));
+      } else if (
+        f.value !== this.filters[key as keyof typeof this.filters].value
+      ) {
+        params.append(key, String(f.value));
       }
     }
 
@@ -465,7 +461,7 @@ class RoyalRoad implements Plugin.PluginBase {
     page: number,
   ): Promise<Plugin.NovelItem[]> {
     const params = new URLSearchParams({
-      page: page.toString(),
+      ...(page > 1 ? { page: page.toString() } : {}),
       title: searchTerm,
       globalFilters: 'true',
     });
@@ -493,67 +489,24 @@ class RoyalRoad implements Plugin.PluginBase {
         'include': [],
         'exclude': [],
       },
+      // prettier-ignore
       'options': [
-        {
-          'label': 'Action',
-          'value': 'action',
-        },
-        {
-          'label': 'Adventure',
-          'value': 'adventure',
-        },
-        {
-          'label': 'Comedy',
-          'value': 'comedy',
-        },
-        {
-          'label': 'Contemporary',
-          'value': 'contemporary',
-        },
-        {
-          'label': 'Drama',
-          'value': 'drama',
-        },
-        {
-          'label': 'Fantasy',
-          'value': 'fantasy',
-        },
-        {
-          'label': 'Historical',
-          'value': 'historical',
-        },
-        {
-          'label': 'Horror',
-          'value': 'horror',
-        },
-        {
-          'label': 'Mystery',
-          'value': 'mystery',
-        },
-        {
-          'label': 'Psychological',
-          'value': 'psychological',
-        },
-        {
-          'label': 'Romance',
-          'value': 'romance',
-        },
-        {
-          'label': 'Satire',
-          'value': 'satire',
-        },
-        {
-          'label': 'Sci-fi',
-          'value': 'sci_fi',
-        },
-        {
-          'label': 'Short Story',
-          'value': 'one_shot',
-        },
-        {
-          'label': 'Tragedy',
-          'value': 'tragedy',
-        },
+        { label: 'Action', value: 'action' },
+        { label: 'Adventure', value: 'adventure' },
+        { label: 'Comedy', value: 'comedy' },
+        { label: 'Contemporary', value: 'contemporary' },
+        { label: 'Drama', value: 'drama' },
+        { label: 'Fantasy', value: 'fantasy' },
+        { label: 'Historical', value: 'historical' },
+        { label: 'Horror', value: 'horror' },
+        { label: 'Mystery', value: 'mystery' },
+        { label: 'Psychological', value: 'psychological' },
+        { label: 'Romance', value: 'romance_main' },
+        { label: 'Satire', value: 'satire' },
+        { label: 'Sci-fi', value: 'sci_fi' },
+        { label: 'Short Story', value: 'one_shot' },
+        { label: 'Thriller', value: 'thriller' },
+        { label: 'Tragedy', value: 'tragedy' },
       ],
     },
     'tags': {
@@ -563,203 +516,80 @@ class RoyalRoad implements Plugin.PluginBase {
         'include': [],
         'exclude': [],
       },
+      // prettier-ignore
       'options': [
-        {
-          'label': 'Anti-Hero Lead',
-          'value': 'anti-hero_lead',
-        },
-        {
-          'label': 'Artificial Intelligence',
-          'value': 'artificial_intelligence',
-        },
-        {
-          'label': 'Attractive Lead',
-          'value': 'attractive_lead',
-        },
-        {
-          'label': 'Cyberpunk',
-          'value': 'cyberpunk',
-        },
-        {
-          'label': 'Dungeon',
-          'value': 'dungeon',
-        },
-        {
-          'label': 'Dystopia',
-          'value': 'dystopia',
-        },
-        {
-          'label': 'Female Lead',
-          'value': 'female_lead',
-        },
-        {
-          'label': 'First Contact',
-          'value': 'first_contact',
-        },
-        {
-          'label': 'GameLit',
-          'value': 'gamelit',
-        },
-        {
-          'label': 'Gender Bender',
-          'value': 'gender_bender',
-        },
-        {
-          'label': 'Genetically Engineered',
-          'value': 'genetically_engineered ',
-        },
-        {
-          'label': 'Grimdark',
-          'value': 'grimdark',
-        },
-        {
-          'label': 'Hard Sci-fi',
-          'value': 'hard_sci-fi',
-        },
-        {
-          'label': 'Harem',
-          'value': 'harem',
-        },
-        {
-          'label': 'High Fantasy',
-          'value': 'high_fantasy',
-        },
-        {
-          'label': 'LitRPG',
-          'value': 'litrpg',
-        },
-        {
-          'label': 'Low Fantasy',
-          'value': 'low_fantasy',
-        },
-        {
-          'label': 'Magic',
-          'value': 'magic',
-        },
-        {
-          'label': 'Male Lead',
-          'value': 'male_lead',
-        },
-        {
-          'label': 'Martial Arts',
-          'value': 'martial_arts',
-        },
-        {
-          'label': 'Multiple Lead Characters',
-          'value': 'multiple_lead',
-        },
-        {
-          'label': 'Mythos',
-          'value': 'mythos',
-        },
-        {
-          'label': 'Non-Human Lead',
-          'value': 'non-human_lead',
-        },
-        {
-          'label': 'Portal Fantasy / Isekai',
-          'value': 'summoned_hero',
-        },
-        {
-          'label': 'Post Apocalyptic',
-          'value': 'post_apocalyptic',
-        },
-        {
-          'label': 'Progression',
-          'value': 'progression',
-        },
-        {
-          'label': 'Reader Interactive',
-          'value': 'reader_interactive',
-        },
-        {
-          'label': 'Reincarnation',
-          'value': 'reincarnation',
-        },
-        {
-          'label': 'Ruling Class',
-          'value': 'ruling_class',
-        },
-        {
-          'label': 'School Life',
-          'value': 'school_life',
-        },
-        {
-          'label': 'Secret Identity',
-          'value': 'secret_identity',
-        },
-        {
-          'label': 'Slice of Life',
-          'value': 'slice_of_life',
-        },
-        {
-          'label': 'Soft Sci-fi',
-          'value': 'soft_sci-fi',
-        },
-        {
-          'label': 'Space Opera',
-          'value': 'space_opera',
-        },
-        {
-          'label': 'Sports',
-          'value': 'sports',
-        },
-        {
-          'label': 'Steampunk',
-          'value': 'steampunk',
-        },
-        {
-          'label': 'Strategy',
-          'value': 'strategy',
-        },
-        {
-          'label': 'Strong Lead',
-          'value': 'strong_lead',
-        },
-        {
-          'label': 'Super Heroes',
-          'value': 'super_heroes',
-        },
-        {
-          'label': 'Supernatural',
-          'value': 'supernatural',
-        },
-        {
-          'label': 'Technologically Engineered',
-          'value': 'technologically_engineered',
-        },
-        {
-          'label': 'Time Loop',
-          'value': 'loop',
-        },
-        {
-          'label': 'Time Travel',
-          'value': 'time_travel',
-        },
-        {
-          'label': 'Urban Fantasy',
-          'value': 'urban_fantasy',
-        },
-        {
-          'label': 'Villainous Lead',
-          'value': 'villainous_lead',
-        },
-        {
-          'label': 'Virtual Reality',
-          'value': 'virtual_reality',
-        },
-        {
-          'label': 'War and Military',
-          'value': 'war_and_military',
-        },
-        {
-          'label': 'Wuxia',
-          'value': 'wuxia',
-        },
-        {
-          'label': 'Xianxia',
-          'value': 'xianxia',
-        },
+        { label: 'Anti-Hero Lead', value: 'anti-hero_lead' },
+        { label: 'Anti-Villain Lead', value: 'antivillain_lead' },
+        { label: 'Apocalypse', value: 'apocalypse' },
+        { label: 'Artificial Intelligence', value: 'artificial_intelligence' },
+        { label: 'Attractive Lead', value: 'attractive_lead' },
+        { label: 'Chivalry', value: 'chivalry' },
+        { label: 'Competing Love Interest', value: 'competing_love' },
+        { label: 'Cozy', value: 'cozy' },
+        { label: 'Crafting', value: 'crafting' },
+        { label: 'Cultivation', value: 'cultivation' },
+        { label: 'Cyberpunk', value: 'cyberpunk' },
+        { label: 'Deck Building', value: 'deck_building' },
+        { label: 'Dungeon Core', value: 'dungeon_core' },
+        { label: 'Dungeon Crawler', value: 'dungeon_crawler' },
+        { label: 'Dystopia', value: 'dystopia' },
+        { label: 'Female Lead', value: 'female_lead' },
+        { label: 'First Contact', value: 'first_contact' },
+        { label: 'GameLit', value: 'gamelit' },
+        { label: 'Male Gay Romance', value: 'gay_romance' },
+        { label: 'Gender Bender', value: 'gender_bender' },
+        { label: 'Genetically Engineered', value: 'genetically_engineered ' },
+        { label: 'Grimdark', value: 'grimdark' },
+        { label: 'Hard Sci-fi', value: 'hard_sci-fi' },
+        { label: 'Multiple Lovers', value: 'harem' },
+        { label: 'High Fantasy', value: 'high_fantasy' },
+        { label: 'Kingdom Building', value: 'kingdom_building' },
+        { label: 'Lesbian Romance', value: 'lesbian_romance' },
+        { label: 'LitRPG', value: 'litrpg' },
+        { label: 'Local Protagonist', value: 'local_protagonist' },
+        { label: 'Low Fantasy', value: 'low_fantasy' },
+        { label: 'Magic', value: 'magic' },
+        { label: 'Magical Girl', value: 'magical_girl' },
+        { label: 'Magitech', value: 'magitech' },
+        { label: 'Male Lead', value: 'male_lead' },
+        { label: 'Martial Arts', value: 'martial_arts' },
+        { label: 'Mecha', value: 'mecha' },
+        { label: 'Modern Knowledge', value: 'modern_knowledge' },
+        { label: 'Monster Evolution', value: 'monster_evolution' },
+        { label: 'Multiple Lead Characters', value: 'multiple_lead' },
+        { label: 'Mythos', value: 'mythos' },
+        { label: 'Non-Human Lead', value: 'non-human_lead' },
+        { label: 'Non-Humanoid Lead', value: 'nonhumanoid_lead' },
+        { label: 'Otome', value: 'otome' },
+        { label: 'Portal Fantasy / Isekai', value: 'summoned_hero' },
+        { label: 'Post Apocalyptic', value: 'post_apocalyptic' },
+        { label: 'Progression', value: 'progression' },
+        { label: 'Reader Interactive', value: 'reader_interactive' },
+        { label: 'Reincarnation', value: 'reincarnation' },
+        { label: 'Romance Subplot', value: 'romance' },
+        { label: 'Ruling Class', value: 'ruling_class' },
+        { label: 'School Life', value: 'school_life' },
+        { label: 'Secret Identity', value: 'secret_identity' },
+        { label: 'Slice of Life', value: 'slice_of_life' },
+        { label: 'Soft Sci-fi', value: 'soft_sci-fi' },
+        { label: 'Space Opera', value: 'space_opera' },
+        { label: 'Sports', value: 'sports' },
+        { label: 'Steampunk', value: 'steampunk' },
+        { label: 'Strategy', value: 'strategy' },
+        { label: 'Strong Lead', value: 'strong_lead' },
+        { label: 'Super Heroes', value: 'super_heroes' },
+        { label: 'Supernatural', value: 'supernatural' },
+        { label: 'Survival', value: 'survival' },
+        { label: 'System Invasion', value: 'system_invasion' },
+        { label: 'Technologically Engineered', value: 'technologically_engineered' },
+        { label: 'Time Loop', value: 'loop' },
+        { label: 'Time Travel', value: 'time_travel' },
+        { label: 'Tower', value: 'tower' },
+        { label: 'Urban Fantasy', value: 'urban_fantasy' },
+        { label: 'Villainous Lead', value: 'villainous_lead' },
+        { label: 'Virtual Reality', value: 'virtual_reality' },
+        { label: 'War and Military', value: 'war_and_military' },
+        { label: 'Wuxia', value: 'wuxia' },
       ],
     },
     'content_warnings': {
@@ -769,31 +599,14 @@ class RoyalRoad implements Plugin.PluginBase {
         'include': [],
         'exclude': [],
       },
+      // prettier-ignore
       'options': [
-        {
-          'label': 'Profanity',
-          'value': 'profanity',
-        },
-        {
-          'label': 'Sexual Content',
-          'value': 'sexuality',
-        },
-        {
-          'label': 'Graphic Violence',
-          'value': 'graphic_violence',
-        },
-        {
-          'label': 'Sensitive Content',
-          'value': 'sensitive',
-        },
-        {
-          'label': 'AI-Assisted Content',
-          'value': 'ai_assisted',
-        },
-        {
-          'label': 'AI-Generated Content',
-          'value': 'ai_generated',
-        },
+        { label: 'Profanity', value: 'profanity' },
+        { label: 'Sexual Content', value: 'sexuality' },
+        { label: 'Graphic Violence', value: 'graphic_violence' },
+        { label: 'Sensitive Content', value: 'sensitive' },
+        { label: 'AI-Assisted Content', value: 'ai_assisted' },
+        { label: 'AI-Generated Content', value: 'ai_generated' },
       ],
     },
     'minPages': {
@@ -820,112 +633,54 @@ class RoyalRoad implements Plugin.PluginBase {
       'type': FilterTypes.Picker,
       'label': 'Status',
       'value': 'ALL',
+      // prettier-ignore
       'options': [
-        {
-          'label': 'All',
-          'value': 'ALL',
-        },
-        {
-          'label': 'Completed',
-          'value': 'COMPLETED',
-        },
-        {
-          'label': 'Dropped',
-          'value': 'DROPPED',
-        },
-        {
-          'label': 'Ongoing',
-          'value': 'ONGOING',
-        },
-        {
-          'label': 'Hiatus',
-          'value': 'HIATUS',
-        },
-        {
-          'label': 'Stub',
-          'value': 'STUB',
-        },
+        { label: 'All', value: 'ALL' },
+        { label: 'Completed', value: 'COMPLETED' },
+        { label: 'Dropped', value: 'DROPPED' },
+        { label: 'Ongoing', value: 'ONGOING' },
+        { label: 'Hiatus', value: 'HIATUS' },
+        { label: 'Inactive', value: 'INACTIVE' },
+        { label: 'Stub', value: 'STUB' },
       ],
     },
     'orderBy': {
       'type': FilterTypes.Picker,
       'label': 'Order by',
       'value': 'relevance',
+      // prettier-ignore
       'options': [
-        {
-          'label': 'Relevance',
-          'value': 'relevance',
-        },
-        {
-          'label': 'Popularity',
-          'value': 'popularity',
-        },
-        {
-          'label': 'Average Rating',
-          'value': 'rating',
-        },
-        {
-          'label': 'Last Update',
-          'value': 'last_update',
-        },
-        {
-          'label': 'Release Date',
-          'value': 'release_date',
-        },
-        {
-          'label': 'Followers',
-          'value': 'followers',
-        },
-        {
-          'label': 'Number of Pages',
-          'value': 'length',
-        },
-        {
-          'label': 'Views',
-          'value': 'views',
-        },
-        {
-          'label': 'Title',
-          'value': 'title',
-        },
-        {
-          'label': 'Author',
-          'value': 'author',
-        },
+        { label: 'Relevance', value: 'relevance' },
+        { label: 'Popularity', value: 'popularity' },
+        { label: 'Average Rating', value: 'rating' },
+        { label: 'Last Update', value: 'last_update' },
+        { label: 'Release Date', value: 'release_date' },
+        { label: 'Followers', value: 'followers' },
+        { label: 'Number of Pages', value: 'length' },
+        { label: 'Views', value: 'views' },
+        { label: 'Title', value: 'title' },
+        { label: 'Author', value: 'author' },
       ],
     },
     'dir': {
       'type': FilterTypes.Picker,
       'label': 'Direction',
       'value': 'desc',
+      // prettier-ignore
       'options': [
-        {
-          'label': 'Ascending',
-          'value': 'asc',
-        },
-        {
-          'label': 'Descending',
-          'value': 'desc',
-        },
+        { label: 'Ascending', value: 'asc' },
+        { label: 'Descending', value: 'desc' },
       ],
     },
     'type': {
       'type': FilterTypes.Picker,
       'label': 'Type',
       'value': 'ALL',
+      // prettier-ignore
       'options': [
-        {
-          'label': 'All',
-          'value': 'ALL',
-        },
-        {
-          'label': 'Fan Fiction',
-          'value': 'fanfiction',
-        },
-        {
-          'label': 'Original',
-          'value': 'original',
-        },
+        { label: 'All', value: 'ALL' },
+        { label: 'Fan Fiction', value: 'fanfiction' },
+        { label: 'Original', value: 'original' },
       ],
     },
   } satisfies Filters;
